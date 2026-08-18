@@ -44,3 +44,10 @@ impl Default for Bouncy{
 
 #[derive(Component)]
 pub struct Selected;
+
+#[derive(Component)]
+pub struct GameObject{
+
+    pub enable_collision:bool
+}
+

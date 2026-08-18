@@ -13,3 +13,11 @@ None,
 Loop,
 Wall
 }
+
+#[derive(Resource)]
+pub struct DebugSettings{
+
+pub show_rays: bool,
+pub show_grid:bool
+
+}
