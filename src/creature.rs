@@ -81,7 +81,8 @@ pub fn spawn_random(commands: &mut Commands,asset_server : &Res<AssetServer>,win
     Brain{
         brain 
     },
-    GameObject{enable_collision:true}
+    GameObject{enable_collision:true},
+    Collider{shape:ColliderShape::Circle { radius: random_size/2.0 }}
    
     )).id();
    

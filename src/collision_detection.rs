@@ -2,7 +2,7 @@ use std::cell;
 use std::time::Instant;
 use crate::{components::*, resources::DebugSettings};
 use bevy::{
-    ecs::entity::EntityHashSet, math::EulerRot::XYZ, platform::collections::HashMap, prelude::*,
+    ecs::entity::EntityHashSet, gizmos::gizmos::GizmoStorage, log::tracing_subscriber::fmt::time, math::EulerRot::XYZ, platform::collections::HashMap, prelude::*,
 };
 
 const GRID_SIZE: u32 = 100;
@@ -12,13 +12,23 @@ pub struct Ray2D {
     range: f32,
 }
 
+#[derive(Component)]
+pub struct Collider {
+   pub shape: ColliderShape
+}
+
+pub enum ColliderShape {
+    Circle{radius : f32},
+    Rect{size: Vec2}
+}
+
     
 
 
 #[derive(Resource, Default)]
 pub struct CollisionGrid {
     grid: HashMap<(i32, i32), EntityHashSet>,
-    entity_cell : HashMap<Entity,(i32,i32)>
+    entity_cell : HashMap<Entity,Vec<(i32,i32)>>
 }
 
 pub struct CollisionDetectionPLugin;
@@ -28,6 +38,7 @@ impl Plugin for CollisionDetectionPLugin {
         app.add_systems(PostUpdate, (draw_rays, draw_grid));
         app.add_observer(add_to_grid);
         app.add_systems(PostUpdate, update_grid);
+        
     }
 }
 
@@ -59,11 +70,7 @@ pub fn draw_rays(
         );
 
         gizmos.line_2d(start, end, Color::srgb(255.0, 0.0, 0.0));
-        gizmos.circle_2d(
-            Isometry2d::from_translation(start),
-            5.0,
-            Color::srgb(0.0, 255.0, 0.0),
-        );
+       
     }
 }
 
@@ -86,56 +93,88 @@ fn draw_grid(mut gizmos: Gizmos, debug_settings: Res<DebugSettings>) {
 
 pub fn add_to_grid(
     add: On<Add, GameObject>,
-    transforms: Query<&Transform>,
+    query: Query<(&Transform,&Collider)>,
     mut colision_grid: ResMut<CollisionGrid>,
+    mut gizmos : Gizmos
 ) {
-    let entity_transform = transforms.get(add.entity).unwrap();
-    let grid_coordinate: (i32, i32) = world_to_grid_coordinate(entity_transform.translation);
+    
+    let (entity_transform,collider) = query.get(add.entity).unwrap();
 
+    //let grid_coordinate: (i32, i32) = world_to_grid_coordinate(entity_transform.translation);
+    let grid_coordinate_tab = check_in_cell_or_overlap(&entity_transform.translation, &collider.shape);
+    for grid_coordinate in &grid_coordinate_tab {
     colision_grid
         .grid
-        .entry(grid_coordinate)
+        .entry(*grid_coordinate)
         .or_default()
         .insert(add.entity);
-
-        colision_grid.entity_cell.insert(add.entity, grid_coordinate);
     // println!("components position : {:?} ajouté a la grille index {:?}",entity_transform.translation.truncate(),grid_coordinate);
+    }
+    colision_grid.entity_cell.insert(add.entity, grid_coordinate_tab);
 }
 
-fn update_grid(query: Query<(Entity,&Transform),With<GameObject>>,mut colision_grid: ResMut<CollisionGrid>){
-
+fn update_grid(query: Query<(Entity,&Transform,&Collider),With<GameObject>>,mut colision_grid: ResMut<CollisionGrid>, mut gizmos: Gizmos){
+//let start = Instant::now();
         
-    for (entity,transform) in query{
-        let grid_coordinate: (i32, i32) = world_to_grid_coordinate(transform.translation);
-        let prev_index = *colision_grid.entity_cell.get(&entity).unwrap();
+    for (entity,transform,collider) in query{
 
+        //let grid_coordinate: (i32, i32) = world_to_grid_coordinate(&transform.translation);
+        let grid_coordinate_tab = check_in_cell_or_overlap(&transform.translation, &collider.shape);
+        let prev_index = colision_grid.entity_cell.get(&entity).unwrap().clone();
+       
         //println!("previous : {:?}, actual : {:?}",prev_index,grid_coordinate);
-        if grid_coordinate == prev_index {continue;}
-        colision_grid
-        .grid
-        .entry(grid_coordinate)
-        .or_default()
-        .insert(entity);
-       // println!("entity: {:?} juste changed from {:?} to {:?}", entity,prev_index,grid_coordinate);
-        colision_grid.grid.entry(prev_index).or_default().remove(&entity);
-        colision_grid.entity_cell.insert(entity, grid_coordinate);
+        
+        /* for h in colision_grid.entity_cell.get(&entity).unwrap(){
+            
+            gizmos.rect_2d(Isometry2d::from_translation(vec2((h.0 as f32 * GRID_SIZE as f32)+(GRID_SIZE as f32*0.5), (h.1 as f32* GRID_SIZE as f32)+(GRID_SIZE as f32*0.5))), Vec2::splat(GRID_SIZE as f32), Color::srgb(255.0, 0.0, 0.0));
+            
+        } */
+
+      /*   for h in &colision_grid.grid{
+            
+                gizmos.rect_2d(Isometry2d::from_translation(vec2((h.0.0 as f32 * GRID_SIZE as f32)+(GRID_SIZE as f32*0.5), (h.0.1 as f32* GRID_SIZE as f32)+(GRID_SIZE as f32*0.5))), Vec2::splat(GRID_SIZE as f32), Color::srgb(255.0, 0.0, 255.0));
+                 
+        } */
+        
+        if grid_coordinate_tab == *prev_index {continue;}
+        for prev in prev_index{
+            
+            if let Some(entity_collection)=colision_grid.grid.get_mut(&prev){
+                entity_collection.remove(&entity);
+                if entity_collection.is_empty(){
+                    colision_grid.grid.remove(&prev);
+                }
+            }
+            
+        }
+        
+        for  grid_coordinate in & grid_coordinate_tab{
+            
+            colision_grid
+            .grid
+            .entry(*grid_coordinate)
+            .or_default()
+            .insert(entity);
+            // println!("entity: {:?} juste changed from {:?} to {:?}", entity,prev_index,grid_coordinate);
+            
+        }
+        colision_grid.entity_cell.insert(entity, grid_coordinate_tab);
 
     }
-    
-
+    // println!("passé : {:?}",start.elapsed().as_micros())
 }
 
 
 
 
 
-fn world_to_grid_coordinate(position: Vec3) -> (i32, i32) {
+fn world_to_grid_coordinate(position: &Vec3) -> (i32, i32) {
     (
         (position.x / GRID_SIZE as f32).floor() as i32,
         (position.y / GRID_SIZE as f32).floor() as i32,
     )
 }
-fn grid_coordinate_to_world(position: (i32, i32)) -> Vec2 {
+fn grid_coordinate_to_world(position: &(i32, i32)) -> Vec2 {
     vec2(
         position.0 as f32 * GRID_SIZE as f32,
         position.1 as f32 * GRID_SIZE as f32,
@@ -162,10 +201,10 @@ impl Ray2D {
         )
     }
 
-    pub fn get_potential_intersect(&self, transform: &Transform,grid : &CollisionGrid, gizmos: &mut Gizmos) -> Vec<Entity>{
+    pub fn get_potential_intersect(&self, transform: &Transform,grid : &CollisionGrid) -> Vec<Entity>{
         //&self,collision_grid : Res<CollisionGrid>,
-        let starting_cell_index = world_to_grid_coordinate(transform.translation);
-        let starting_cell_pos = grid_coordinate_to_world(starting_cell_index);
+        let starting_cell_index = world_to_grid_coordinate(&transform.translation);
+        let starting_cell_pos = grid_coordinate_to_world(&starting_cell_index);
 
         let ray_vector = self.get_direction(transform);
         let ray_direction = ray_vector.normalize();
@@ -190,7 +229,7 @@ impl Ray2D {
             }
          // gizmos.circle_2d(Isometry2d::from_translation(loop_ray_start_point), 10.0, Color::srgb(255.0, 0.0, 255.0));
                  
-            cell_collection.push(world_to_grid_coordinate(loop_cell_pos.extend(0.0)));
+            cell_collection.push(world_to_grid_coordinate(&loop_cell_pos.extend(0.0)));
             time_out_counter+=1;
            
         }
@@ -208,7 +247,7 @@ impl Ray2D {
         let mut potential_collision_list : Vec<Entity> = Vec::default();
         for cell in cell_collection{
 
-          //  gizmos.rect_2d(Isometry2d::from_translation(vec2((cell.0  as f32 * GRID_SIZE as f32)+(GRID_SIZE as f32*0.5), (cell.1 as f32* GRID_SIZE as f32)+(GRID_SIZE as f32*0.5))), Vec2::splat(GRID_SIZE as f32), Color::srgb(255.0, 0.0, 0.0));
+           
             
              if let Some(entities) = get_entity_in_cell(cell, grid){
             for entity in entities.iter(){
@@ -247,17 +286,9 @@ fn check_vector_sign(vec1: Vec2, vec2: Vec2) -> bool {
     (vec1 * vec2).x.is_sign_positive() && (vec1 * vec2).y.is_sign_positive()
 }
 
-fn get_entity_in_cell(index: (i32,i32),grid : &CollisionGrid)->Option<EntityHashSet>{
+fn get_entity_in_cell(index: (i32,i32),grid : &CollisionGrid)->Option<&EntityHashSet>{
 
-       if let Some( restult)= grid.grid.get(&index){
-
-        return Some(restult.clone());
-       }
-      else {
-          return None;
-      }
-      
-          
+     grid.grid.get(&index)
       
 }
 fn max_cells_for_ray(ray_length: f32, cell_size: f32) -> usize {
@@ -329,10 +360,93 @@ fn ray_cell_exit_point(
     //coordonée global
     let exit_point = cell_origin_world + solution_finale;
     
-    let new_cell = world_to_grid_coordinate(exit_point.extend(0.0));
-    let new_cell_world = grid_coordinate_to_world(new_cell);
+    let new_cell = world_to_grid_coordinate(&exit_point.extend(0.0));
+    let new_cell_world = grid_coordinate_to_world(&new_cell);
    // println!("passé : {:?}",start.elapsed().as_nanos());
     //println!("ancienne cellule : {:?}, nouvelle : {:?}",cell_origin_world,new_cell_world);
     (exit_point,new_cell_world)
     // println!("nombre de solution : {:?}",cell_origin_world+solution_finale);
+}
+
+pub fn check_in_cell_or_overlap(transform : &Vec3,shape : &ColliderShape)-> Vec<(i32,i32)>{
+
+    let cell_index = world_to_grid_coordinate(transform);
+    let cell_world_pos = grid_coordinate_to_world(&cell_index);
+    let in_cell_local_pos = transform.truncate()-cell_world_pos;
+
+    let mut cell_index_tab :Vec<(i32,i32)> = Vec::default();
+
+    match shape {
+        
+        ColliderShape::Circle { radius } => {
+
+            let size = GRID_SIZE as f32;
+
+    cell_index_tab.push(cell_index);
+
+    if in_cell_local_pos.x - radius < 0.0 {
+        cell_index_tab.push((cell_index.0 - 1, cell_index.1));
+    }
+
+    if in_cell_local_pos.x + radius > size {
+        cell_index_tab.push((cell_index.0 + 1, cell_index.1));
+    }
+
+    if in_cell_local_pos.y - radius < 0.0 {
+        cell_index_tab.push((cell_index.0, cell_index.1 - 1));
+    }
+
+    if in_cell_local_pos.y + radius > size {
+        cell_index_tab.push((cell_index.0, cell_index.1 + 1));
+    }
+
+    // Coins
+    if in_cell_local_pos.x - radius < 0.0
+        && in_cell_local_pos.y - radius < 0.0
+    {
+        cell_index_tab.push((cell_index.0 - 1, cell_index.1 - 1));
+    }
+
+    if in_cell_local_pos.x - radius < 0.0
+        && in_cell_local_pos.y + radius > size
+    {
+        cell_index_tab.push((cell_index.0 - 1, cell_index.1 + 1));
+    }
+
+    if in_cell_local_pos.x + radius > size
+        && in_cell_local_pos.y - radius < 0.0
+    {
+        cell_index_tab.push((cell_index.0 + 1, cell_index.1 - 1));
+    }
+
+    if in_cell_local_pos.x + radius > size
+        && in_cell_local_pos.y + radius > size
+    {
+        cell_index_tab.push((cell_index.0 + 1, cell_index.1 + 1));
+    }
+
+            
+            
+            
+            for  s in &cell_index_tab{
+               
+               // gizmos.circle_2d(Isometry2d::from_translation(s), 3.0, Color::srgb(255.0, 0.0, 255.0));
+                let new_cell_pos= grid_coordinate_to_world(&s);
+                //gizmos.rect_2d(Isometry2d::from_translation(new_cell_pos + vec2(50.0, 50.0))  , vec2(100.0, 100.0), Color::srgb(255.0, 0.0, 255.0));
+                
+               
+            }
+            if cell_index_tab.is_empty() {
+                cell_index_tab.push(cell_index);
+               
+            }
+         
+            return cell_index_tab;
+        }
+
+
+        ColliderShape::Rect { size } => {return cell_index_tab;}
+    }
+
+    
 }
