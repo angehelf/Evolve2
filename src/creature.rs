@@ -31,6 +31,8 @@ app.add_systems(FixedUpdate, think);
 #[derive(Component)]
 pub struct Creature;
 
+
+
 #[derive(Component)]
 pub struct FoodReserve(f32);
 
@@ -65,8 +67,8 @@ pub fn spawn_random(commands: &mut Commands,asset_server : &Res<AssetServer>,win
         ..Sprite::from_image(asset_server.load("sprites/Creature_1_0.png"))
     },
     Transform{
-        translation: vec3(rng.random_range(-(window_size.x as f32 *0.5)..(window_size.x as f32 *0.5)),
-    rng.random_range(-(window_size.y as f32 *0.5)..(window_size.y as f32 *0.5)),0.0),
+        translation: vec3(rng.random_range(-(1800.0)..(1800.0)),
+    rng.random_range(-(1800.0)..(1800.0)),0.0),
         rotation: Quat::from_rotation_z(random_heading*DEG_TO_RAD),
         ..Default::default()
     },
@@ -82,12 +84,20 @@ pub fn spawn_random(commands: &mut Commands,asset_server : &Res<AssetServer>,win
         brain 
     },
     GameObject{enable_collision:true},
-    Collider{shape:ColliderShape::Circle { radius: random_size/2.0 }}
-   
+    Collider{shape:ColliderShape::Circle { radius: random_size/2.0 }},
+    
     )).id();
    
-   commands.spawn(Ray2D::from_parent(Transform::default(), 100.0, parent));
- 
+   commands.spawn((Ray2D::from_parent(Transform{
+    rotation: Quat::from_rotation_z(0.0),
+    ..default()
+   }
+   , 100.0, parent),
+   //RayCastRequest{pending:false}
+   
+
+   ));
+   
 }
    
 

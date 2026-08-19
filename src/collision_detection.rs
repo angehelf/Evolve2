@@ -4,17 +4,25 @@ use crate::{components::*, resources::DebugSettings};
 use bevy::{
     ecs::entity::EntityHashSet, gizmos::gizmos::GizmoStorage, log::tracing_subscriber::fmt::time, math::EulerRot::XYZ, platform::collections::HashMap, prelude::*,
 };
+use num_traits::Pow;
 
-const GRID_SIZE: u32 = 100;
+const GRID_SIZE: u32 = 60;
 const CELL_BORDER_PADDING:f32 = 0.01;
 #[derive(Component)]
 pub struct Ray2D {
     range: f32,
+    source: Entity
+    
 }
 
 #[derive(Component)]
 pub struct Collider {
    pub shape: ColliderShape
+}
+#[derive(Component,Default)]
+pub struct RaycastCoolDown{
+    pub clock:f32,
+    pub cooldown: f32
 }
 
 pub enum ColliderShape {
@@ -38,17 +46,18 @@ impl Plugin for CollisionDetectionPLugin {
         app.add_systems(PostUpdate, (draw_rays, draw_grid));
         app.add_observer(add_to_grid);
         app.add_systems(PostUpdate, update_grid);
+        app.add_systems(FixedUpdate, cast_rays);
         
     }
 }
 
 impl Ray2D {
     pub fn spawn(transform: Transform, range: f32) -> impl Bundle {
-        (Ray2D { range }, transform)
+        (Ray2D { range,source:Entity::PLACEHOLDER }, transform,RaycastCoolDown{cooldown:0.1, ..Default::default()})
     }
 
     pub fn from_parent(transform: Transform, range: f32, parent: Entity) -> impl Bundle {
-        (Ray2D { range }, transform, ChildOf(parent))
+        (Ray2D { range,source:parent }, transform, ChildOf(parent),RaycastCoolDown{cooldown:0.1, ..Default::default()})
     }
 }
 
@@ -191,7 +200,7 @@ impl Ray2D {
     }
     ///Retourne le vecteur unitaire de direction
     fn get_direction(&self, transform: &Transform) -> Vec2 {
-        self.get_end_point(transform) - self.get_origin(transform)
+        (self.get_end_point(transform) - self.get_origin(transform)).normalize()
     }
 
     fn get_end_point(&self, transform: &Transform) -> Vec2 {
@@ -206,8 +215,7 @@ impl Ray2D {
         let starting_cell_index = world_to_grid_coordinate(&transform.translation);
         let starting_cell_pos = grid_coordinate_to_world(&starting_cell_index);
 
-        let ray_vector = self.get_direction(transform);
-        let ray_direction = ray_vector.normalize();
+        let ray_direction = self.get_direction(transform);
 
         let mut loop_ray_start_point = transform.translation.truncate();
         let mut loop_cell_pos = starting_cell_pos;
@@ -450,3 +458,102 @@ pub fn check_in_cell_or_overlap(transform : &Vec3,shape : &ColliderShape)-> Vec<
 
     
 }
+#[derive(Component)]
+pub struct RayCastResult {
+    intersection_list: Vec<RayCastIntersection>
+}
+pub struct RayCastIntersection{
+    entity: Entity,
+    distance: f32
+}
+#[derive(Component)]
+pub struct RayCastRequest;
+
+
+
+
+    
+    pub fn cast_rays(ray_query: Query<(&GlobalTransform,&Ray2D),With<RayCastRequest>>,grid:Res<CollisionGrid>,target_query: Query<(&Transform,&Collider)>,mut gizmos: Gizmos) {
+
+        let mut result =RayCastResult{intersection_list:Vec::default()};
+        for (ray_transform,ray) in ray_query{
+           
+            let potential_intersection_list = ray.get_potential_intersect(&ray_transform.compute_transform(), &grid);
+            //for p in potential_intersection{println!("potentiel : {:?}",p);}
+             
+
+            for potencial_intersection in potential_intersection_list{
+                if potencial_intersection==ray.source{continue;}
+                let (target_transform,target_collider) = target_query.get(potencial_intersection).unwrap();
+                
+               if let Some(intersection) = ray_intersection(ray, &ray_transform.compute_transform(),target_transform,target_collider){
+                gizmos.circle_2d(Isometry2d::from_translation(intersection.0), 3.0, Color::srgb(0.0, 255.0, 0.0));
+                //println!("intersection en : {:?}",instersection);
+                result.intersection_list.push(RayCastIntersection { entity: potencial_intersection, distance: intersection.1 });
+               }
+             
+            }
+
+
+        }
+        
+    }
+
+    
+    pub fn request_ray_cast(entity: Entity,commands: &mut Commands){
+
+        commands.entity(entity).insert(RayCastRequest);
+    }
+    
+
+    fn ray_intersection(ray: &Ray2D,ray_transform: &Transform,target_transform:&Transform,target_collider:&Collider)-> Option<(Vec2,f32)>{
+        
+        match target_collider.shape{
+           
+            ColliderShape::Circle { radius } => {
+                
+               
+                let direction = ray.get_direction(ray_transform);
+                let m = ray_transform.translation.truncate()-target_transform.translation.truncate();
+                let coef_a = direction.dot(direction);
+                let coef_b = 2.0* m.dot(direction);
+                let constant_c = m.dot(m)-radius.pow(2.0);
+            
+                let discriminant = coef_b.pow(2.0)-4.0*(coef_a*constant_c);
+                let  s : Vec2;
+                if discriminant < 0.0 {return None;}
+
+                if discriminant == 0.0 {
+                    let t= (-coef_b)/(2.0*coef_a);
+                    if t<0.0 {return None;}
+                    s = ray_transform.translation.truncate()+(direction*t);
+                    return Some((s,t));
+                }
+
+                else  {
+                    let mut t1 = (-coef_b - discriminant.sqrt()) / (2.0 * coef_a);
+                    if t1 <0.0 {t1 = f32::MAX}
+                    let mut t2 = (-coef_b + discriminant.sqrt()) / (2.0 * coef_a);
+                    if t2 <0.0 {t2 = f32::MAX}
+                   
+                    if t1>ray.range && t2>ray.range{return None;}
+                    let distance;
+                    if t1<t2 {
+                          s = ray_transform.translation.truncate()+(direction*t1);
+                          distance = t1;
+                    }
+                    else {s = ray_transform.translation.truncate()+(direction*t2);
+                        distance = t2;
+                    }
+                    
+                    return Some((s,distance));
+                    
+                }
+                
+            }
+
+            ColliderShape::Rect { size }=>{return None;}
+            
+        }
+        
+    }
