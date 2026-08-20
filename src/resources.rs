@@ -18,6 +18,7 @@ Wall
 pub struct DebugSettings{
 
 pub show_rays: bool,
-pub show_grid:bool
+pub show_grid:bool,
+pub show_collider: bool
 
 }

@@ -8,11 +8,12 @@ use num_traits::Pow;
 
 const GRID_SIZE: u32 = 60;
 const CELL_BORDER_PADDING:f32 = 0.01;
-#[derive(Component)]
+
 pub struct Ray2D {
-    range: f32,
-    source: Entity
-    
+    pub origin: Vec2,
+    pub direction : Vec2,
+    pub range: f32,
+    //pub source: Entity
 }
 
 #[derive(Component)]
@@ -43,46 +44,30 @@ pub struct CollisionDetectionPLugin;
 impl Plugin for CollisionDetectionPLugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CollisionGrid>();
-        app.add_systems(PostUpdate, (draw_rays, draw_grid));
+        app.add_systems(PostUpdate,  (draw_grid,draw_collider).run_if(|debug: Res<DebugSettings>| debug.show_collider));
         app.add_observer(add_to_grid);
         app.add_systems(PostUpdate, update_grid);
-        app.add_systems(FixedUpdate, cast_rays);
+        
+        
         
     }
 }
 
-impl Ray2D {
-    pub fn spawn(transform: Transform, range: f32) -> impl Bundle {
-        (Ray2D { range,source:Entity::PLACEHOLDER }, transform,RaycastCoolDown{cooldown:0.1, ..Default::default()})
-    }
+fn draw_collider(mut gizmos: Gizmos, debug_settings: Res<DebugSettings>,query:Query<(&Transform,&Collider)>) {
+ 
+    for (transform,collider) in query{
+        match collider.shape {
+            
+            ColliderShape::Circle { radius }=>{
+                gizmos.circle_2d(Isometry2d::from_translation(transform.translation.truncate()), radius, Color::srgb(0.0, 255.0, 0.0));
+            }
 
-    pub fn from_parent(transform: Transform, range: f32, parent: Entity) -> impl Bundle {
-        (Ray2D { range,source:parent }, transform, ChildOf(parent),RaycastCoolDown{cooldown:0.1, ..Default::default()})
-    }
-}
-
-pub fn draw_rays(
-    rays: Query<(&Ray2D, &GlobalTransform, &Transform)>,
-    mut gizmos: Gizmos,
-    debug_settings: Res<DebugSettings>,
-) {
-    if !debug_settings.show_rays {
-        return;
-    }
-
-    for (ray, global_transform, transform) in rays {
-        let angle = global_transform.rotation().to_euler(EulerRot::XYZ).2;
-        let start = global_transform.translation().truncate();
-        let end = vec2(
-            global_transform.translation().x - f32::sin(angle) * ray.range,
-            global_transform.translation().y + f32::cos(angle) * ray.range,
-        );
-
-        gizmos.line_2d(start, end, Color::srgb(255.0, 0.0, 0.0));
-       
+            ColliderShape::Rect { size }=>{
+                gizmos.rect_2d(Isometry2d::from_translation(transform.translation.truncate()), size, Color::srgb(0.0, 255.0, 0.0));
+            }
+        }
     }
 }
-
 fn draw_grid(mut gizmos: Gizmos, debug_settings: Res<DebugSettings>) {
     if !debug_settings.show_grid {
         return;
@@ -110,7 +95,7 @@ pub fn add_to_grid(
     let (entity_transform,collider) = query.get(add.entity).unwrap();
 
     //let grid_coordinate: (i32, i32) = world_to_grid_coordinate(entity_transform.translation);
-    let grid_coordinate_tab = check_in_cell_or_overlap(&entity_transform.translation, &collider.shape);
+    let grid_coordinate_tab = check_in_cell_or_overlap(&entity_transform.translation.truncate(), &collider.shape);
     for grid_coordinate in &grid_coordinate_tab {
     colision_grid
         .grid
@@ -128,7 +113,7 @@ fn update_grid(query: Query<(Entity,&Transform,&Collider),With<GameObject>>,mut 
     for (entity,transform,collider) in query{
 
         //let grid_coordinate: (i32, i32) = world_to_grid_coordinate(&transform.translation);
-        let grid_coordinate_tab = check_in_cell_or_overlap(&transform.translation, &collider.shape);
+        let grid_coordinate_tab = check_in_cell_or_overlap(&transform.translation.truncate(), &collider.shape);
         let prev_index = colision_grid.entity_cell.get(&entity).unwrap().clone();
        
         //println!("previous : {:?}, actual : {:?}",prev_index,grid_coordinate);
@@ -177,7 +162,7 @@ fn update_grid(query: Query<(Entity,&Transform,&Collider),With<GameObject>>,mut 
 
 
 
-fn world_to_grid_coordinate(position: &Vec3) -> (i32, i32) {
+fn world_to_grid_coordinate(position: &Vec2) -> (i32, i32) {
     (
         (position.x / GRID_SIZE as f32).floor() as i32,
         (position.y / GRID_SIZE as f32).floor() as i32,
@@ -191,33 +176,33 @@ fn grid_coordinate_to_world(position: &(i32, i32)) -> Vec2 {
 }
 
 impl Ray2D {
-    fn get_origin(&self, transform: &Transform) -> Vec2 {
-        transform.translation.truncate()
+    pub fn get_origin(&self) -> Vec2 {
+        self.origin
     }
 
-    fn get_angle(&self, transform: &Transform) -> f32 {
+    pub fn get_angle(&self, transform: &Transform) -> f32 {
         transform.rotation.to_euler(XYZ).2
     }
     ///Retourne le vecteur unitaire de direction
-    fn get_direction(&self, transform: &Transform) -> Vec2 {
-        (self.get_end_point(transform) - self.get_origin(transform)).normalize()
+    pub fn get_direction(&self) -> Vec2 {
+        self.direction
     }
 
-    fn get_end_point(&self, transform: &Transform) -> Vec2 {
-        vec2(
-            self.get_origin(transform).x - f32::sin(self.get_angle(transform)) * self.range,
-            self.get_origin(transform).y + f32::cos(self.get_angle(transform)) * self.range,
-        )
+    pub fn get_end_point(&self) -> Vec2 {
+        
+        self.origin+self.direction * self.range
+            
+        
     }
 
-    pub fn get_potential_intersect(&self, transform: &Transform,grid : &CollisionGrid) -> Vec<Entity>{
+    pub fn get_potential_intersect(&self, grid : &CollisionGrid) -> Vec<Entity>{
         //&self,collision_grid : Res<CollisionGrid>,
-        let starting_cell_index = world_to_grid_coordinate(&transform.translation);
+        let starting_cell_index = world_to_grid_coordinate(&self.origin);
         let starting_cell_pos = grid_coordinate_to_world(&starting_cell_index);
 
-        let ray_direction = self.get_direction(transform);
+        let ray_direction = self.get_direction();
 
-        let mut loop_ray_start_point = transform.translation.truncate();
+        let mut loop_ray_start_point = self.origin;
         let mut loop_cell_pos = starting_cell_pos;
         let mut solution_to_end_point_vector=ray_direction;
 
@@ -230,14 +215,14 @@ impl Ray2D {
             (loop_ray_start_point, loop_cell_pos) = ray_cell_exit_point(loop_ray_start_point, loop_cell_pos, ray_direction);
             
             
-            solution_to_end_point_vector = self.get_end_point(transform) - loop_ray_start_point;
+            solution_to_end_point_vector = self.get_end_point() - loop_ray_start_point;
             let solution_to_end_point_vector_normalised = solution_to_end_point_vector.normalize();
             if !check_vector_sign(ray_direction, solution_to_end_point_vector_normalised) {
                 break;
             }
          // gizmos.circle_2d(Isometry2d::from_translation(loop_ray_start_point), 10.0, Color::srgb(255.0, 0.0, 255.0));
                  
-            cell_collection.push(world_to_grid_coordinate(&loop_cell_pos.extend(0.0)));
+            cell_collection.push(world_to_grid_coordinate(&loop_cell_pos));
             time_out_counter+=1;
            
         }
@@ -368,7 +353,7 @@ fn ray_cell_exit_point(
     //coordonée global
     let exit_point = cell_origin_world + solution_finale;
     
-    let new_cell = world_to_grid_coordinate(&exit_point.extend(0.0));
+    let new_cell = world_to_grid_coordinate(&exit_point);
     let new_cell_world = grid_coordinate_to_world(&new_cell);
    // println!("passé : {:?}",start.elapsed().as_nanos());
     //println!("ancienne cellule : {:?}, nouvelle : {:?}",cell_origin_world,new_cell_world);
@@ -376,11 +361,11 @@ fn ray_cell_exit_point(
     // println!("nombre de solution : {:?}",cell_origin_world+solution_finale);
 }
 
-pub fn check_in_cell_or_overlap(transform : &Vec3,shape : &ColliderShape)-> Vec<(i32,i32)>{
+pub fn check_in_cell_or_overlap(position : &Vec2,shape : &ColliderShape)-> Vec<(i32,i32)>{
 
-    let cell_index = world_to_grid_coordinate(transform);
+    let cell_index = world_to_grid_coordinate(position);
     let cell_world_pos = grid_coordinate_to_world(&cell_index);
-    let in_cell_local_pos = transform.truncate()-cell_world_pos;
+    let in_cell_local_pos = position-cell_world_pos;
 
     let mut cell_index_tab :Vec<(i32,i32)> = Vec::default();
 
@@ -458,7 +443,7 @@ pub fn check_in_cell_or_overlap(transform : &Vec3,shape : &ColliderShape)-> Vec<
 
     
 }
-#[derive(Component)]
+
 pub struct RayCastResult {
     intersection_list: Vec<RayCastIntersection>
 }
@@ -466,55 +451,51 @@ pub struct RayCastIntersection{
     entity: Entity,
     distance: f32
 }
-#[derive(Component)]
-pub struct RayCastRequest;
+
 
 
 
 
     
-    pub fn cast_rays(ray_query: Query<(&GlobalTransform,&Ray2D),With<RayCastRequest>>,grid:Res<CollisionGrid>,target_query: Query<(&Transform,&Collider)>,mut gizmos: Gizmos) {
+    pub fn cast_rays(source_entity: Entity,ray: &Ray2D, grid: &CollisionGrid,target_query: &Query<(&Transform,&Collider)>) ->RayCastResult{
 
-        let mut result =RayCastResult{intersection_list:Vec::default()};
-        for (ray_transform,ray) in ray_query{
+            let mut result =RayCastResult{intersection_list:Vec::default()};
+       
            
-            let potential_intersection_list = ray.get_potential_intersect(&ray_transform.compute_transform(), &grid);
+            let potential_intersection_list = ray.get_potential_intersect(&grid);
             //for p in potential_intersection{println!("potentiel : {:?}",p);}
              
 
             for potencial_intersection in potential_intersection_list{
-                if potencial_intersection==ray.source{continue;}
+                if potencial_intersection==source_entity{continue;}
                 let (target_transform,target_collider) = target_query.get(potencial_intersection).unwrap();
                 
-               if let Some(intersection) = ray_intersection(ray, &ray_transform.compute_transform(),target_transform,target_collider){
-                gizmos.circle_2d(Isometry2d::from_translation(intersection.0), 3.0, Color::srgb(0.0, 255.0, 0.0));
-                //println!("intersection en : {:?}",instersection);
+               if let Some(intersection) = ray_intersection(ray,target_transform,target_collider){
+                //gizmos.circle_2d(Isometry2d::from_translation(intersection.0), 3.0, Color::srgb(0.0, 255.0, 0.0));
+                //println!("intersection en : {:?}",intersection.0);
                 result.intersection_list.push(RayCastIntersection { entity: potencial_intersection, distance: intersection.1 });
                }
              
             }
 
-
-        }
+            result
+    }
         
-    }
-
-    
-    pub fn request_ray_cast(entity: Entity,commands: &mut Commands){
-
-        commands.entity(entity).insert(RayCastRequest);
-    }
     
 
-    fn ray_intersection(ray: &Ray2D,ray_transform: &Transform,target_transform:&Transform,target_collider:&Collider)-> Option<(Vec2,f32)>{
+    
+   
+    
+
+    fn ray_intersection(ray: &Ray2D,target_transform:&Transform,target_collider:&Collider)-> Option<(Vec2,f32)>{
         
         match target_collider.shape{
            
             ColliderShape::Circle { radius } => {
                 
                
-                let direction = ray.get_direction(ray_transform);
-                let m = ray_transform.translation.truncate()-target_transform.translation.truncate();
+                let direction = ray.get_direction();
+                let m = ray.origin-target_transform.translation.truncate();
                 let coef_a = direction.dot(direction);
                 let coef_b = 2.0* m.dot(direction);
                 let constant_c = m.dot(m)-radius.pow(2.0);
@@ -526,7 +507,7 @@ pub struct RayCastRequest;
                 if discriminant == 0.0 {
                     let t= (-coef_b)/(2.0*coef_a);
                     if t<0.0 {return None;}
-                    s = ray_transform.translation.truncate()+(direction*t);
+                    s = ray.origin+(direction*t);
                     return Some((s,t));
                 }
 
@@ -539,10 +520,10 @@ pub struct RayCastRequest;
                     if t1>ray.range && t2>ray.range{return None;}
                     let distance;
                     if t1<t2 {
-                          s = ray_transform.translation.truncate()+(direction*t1);
+                          s = ray.origin+(direction*t1);
                           distance = t1;
                     }
-                    else {s = ray_transform.translation.truncate()+(direction*t2);
+                    else {s = ray.origin+(direction*t2);
                         distance = t2;
                     }
                     

@@ -9,7 +9,7 @@ use core::f32;
 
 
 use bevy::{prelude::*, window::{PrimaryWindow, WindowResolution}};
-use crate::{collision_detection::{ColliderShape, CollisionDetectionPLugin, CollisionGrid, Ray2D, check_in_cell_or_overlap, request_ray_cast}, components::Size, creature::{Creature, CreaturePlugin}, resources::{DebugSettings, MapBorder, MapBorderType}};
+use crate::{collision_detection::{ColliderShape, CollisionDetectionPLugin, CollisionGrid, Ray2D, check_in_cell_or_overlap}, components::Size, creature::{Creature, CreaturePlugin}, resources::{DebugSettings, MapBorder, MapBorderType}};
 use rand::{RngExt, random_range};
 const DEG_TO_RAD : f32 = (2.0* std::f32::consts::PI)/360.0;
 
@@ -20,7 +20,8 @@ fn main() {
     App::new()
     .insert_resource(DebugSettings{
         show_rays:true,
-        show_grid:true
+        show_grid:true,
+        show_collider:true,
     })
     .add_plugins(DefaultPlugins.set(WindowPlugin{
         primary_window: Some(Window{
@@ -41,7 +42,6 @@ fn main() {
     
     .add_plugins(CreaturePlugin)
     .add_systems(FixedUpdate, (systems::move_with_speed,systems::turn_from_heading_speed,systems::correct_transform_from_boundaries.after(systems::turn_from_heading_speed).after(systems::move_with_speed)))
-    .add_systems(FixedUpdate, test)
     .add_systems(FixedUpdate, debug)
     .add_plugins(CollisionDetectionPLugin)
     .run();
@@ -57,12 +57,12 @@ fn setup(mut commands: Commands,asset_server:Res<AssetServer>,window:Single<&Win
     
     
     let mut rng = rand::rng();
-    for _i in 0..2000{
+    for _i in 0..1000{
         creature::Creature::spawn_random(&mut commands, &asset_server, &window);
         
         
     }
-    for _i in 0..1{
+    for _i in 0..1000{
         
         let random_translation = vec3(rng.random_range(-500.0..500.0), rng.random_range(-500.0..500.0), 0.0);
         let random_rotation = vec3(0.0,0.0,DEG_TO_RAD*random_range(0.0..360.0));
@@ -76,17 +76,7 @@ fn setup(mut commands: Commands,asset_server:Res<AssetServer>,window:Single<&Win
    
  
 }
-fn test(mut commands: Commands, query : Query<(Entity,&mut collision_detection::RaycastCoolDown),With<Ray2D>>,time:Res<Time>){
-    for (entity,mut raycast_cool_down) in query{
-        raycast_cool_down.clock += time.delta_secs();
-        if raycast_cool_down.clock >= raycast_cool_down.cooldown{
-            
-             request_ray_cast(entity, &mut commands);
-             raycast_cool_down.clock =0.0; 
-        }
-        
-    }
-}
+
 
 
 
