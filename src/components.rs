@@ -13,11 +13,9 @@ impl Default for Speed{
     }
 }
 
-#[derive(Component)]
-pub struct Heading(pub f32);
 
-#[derive(Component)]
-pub struct HeadingSpeed(pub f32);
+
+
 
 #[derive(Component)]
 pub struct Healt(pub f32);
@@ -29,25 +27,8 @@ impl Default for Healt{
     }
 }
 
-#[derive(Component)]
-pub struct Bouncy{
-    restitution_coef : f32
-}
-impl Default for Bouncy{
 
-    fn default()-> Self{
-        Self{
-            restitution_coef : 1.0
-        }
-    }
-}
 
 #[derive(Component)]
 pub struct Selected;
-
-#[derive(Component)]
-pub struct GameObject{
-
-    pub enable_collision:bool
-}
 

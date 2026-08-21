@@ -1,8 +1,8 @@
 use std::cell;
 use std::time::Instant;
-use crate::{components::*, resources::DebugSettings};
+use crate::{components::*, physics::RigidBody, resources::DebugSettings};
 use bevy::{
-    ecs::entity::EntityHashSet, gizmos::gizmos::GizmoStorage, log::tracing_subscriber::fmt::time, math::EulerRot::XYZ, platform::collections::HashMap, prelude::*,
+    color::palettes::css::RED, ecs::entity::EntityHashSet, gizmos::gizmos::GizmoStorage, log::tracing_subscriber::fmt::time, math::{EulerRot::XYZ, VectorSpace}, platform::collections::HashMap, prelude::*, transform,
 };
 use num_traits::Pow;
 
@@ -18,8 +18,31 @@ pub struct Ray2D {
 
 #[derive(Component)]
 pub struct Collider {
-   pub shape: ColliderShape
+   pub shape: ColliderShape,
+  
 }
+#[derive(Clone,Copy)]
+pub struct Collision{
+    pub penetration: f32,
+    pub normal:Vec2,
+    pub with: Entity
+}
+#[derive(Component,Clone)]
+pub struct CollisionList{
+    pub collisions: Vec<Collision>
+}
+impl Default for Collision{
+
+    fn default() -> Self {
+        Self { penetration: 0.0, normal: Vec2::ZERO, with: Entity::PLACEHOLDER}
+    }
+}
+impl Default for CollisionList{
+    fn default() -> Self {
+        Self{collisions:Vec::default()}
+    }
+}
+
 #[derive(Component,Default)]
 pub struct RaycastCoolDown{
     pub clock:f32,
@@ -47,6 +70,7 @@ impl Plugin for CollisionDetectionPLugin {
         app.add_systems(PostUpdate,  (draw_grid,draw_collider).run_if(|debug: Res<DebugSettings>| debug.show_collider));
         app.add_observer(add_to_grid);
         app.add_systems(PostUpdate, update_grid);
+        app.add_systems(FixedUpdate, (colision_detection,correct_collider_overlap).chain());
         
         
         
@@ -86,7 +110,7 @@ fn draw_grid(mut gizmos: Gizmos, debug_settings: Res<DebugSettings>) {
 }
 
 pub fn add_to_grid(
-    add: On<Add, GameObject>,
+    add: On<Add, Collider>,
     query: Query<(&Transform,&Collider)>,
     mut colision_grid: ResMut<CollisionGrid>,
     mut gizmos : Gizmos
@@ -107,7 +131,7 @@ pub fn add_to_grid(
     colision_grid.entity_cell.insert(add.entity, grid_coordinate_tab);
 }
 
-fn update_grid(query: Query<(Entity,&Transform,&Collider),With<GameObject>>,mut colision_grid: ResMut<CollisionGrid>, mut gizmos: Gizmos){
+fn update_grid(query: Query<(Entity,&Transform,&Collider)>,mut colision_grid: ResMut<CollisionGrid>, mut gizmos: Gizmos){
 //let start = Instant::now();
         
     for (entity,transform,collider) in query{
@@ -447,9 +471,10 @@ pub fn check_in_cell_or_overlap(position : &Vec2,shape : &ColliderShape)-> Vec<(
 pub struct RayCastResult {
     intersection_list: Vec<RayCastIntersection>
 }
+#[derive(Clone)]
 pub struct RayCastIntersection{
-    entity: Entity,
-    distance: f32
+    pub entity: Entity,
+    pub distance: f32
 }
 
 
@@ -477,7 +502,7 @@ pub struct RayCastIntersection{
                }
              
             }
-
+            
             result
     }
         
@@ -538,3 +563,148 @@ pub struct RayCastIntersection{
         }
         
     }
+
+    pub fn colision_detection( query:Query<(&Transform,&Collider,Entity)> ,mut collision_list_query: Query<&mut CollisionList>, grid:Res<CollisionGrid>){
+       
+        let mut result :Vec<(Collision,Entity)> = Vec::default();
+
+        //purge des ancienne collisions
+        for mut collision_list in collision_list_query.iter_mut() {
+            collision_list.collisions.clear();
+        }
+        //lecture des données et calcul des collision
+        for (transform,  collider,entity) in query.iter(){
+            
+            match collider.shape {
+                
+              ColliderShape::Circle { radius }=>{
+                let position = transform.translation.truncate();
+                let potential_collision_list = potential_collision(&grid, &position, &collider.shape);
+                
+                
+                for target in potential_collision_list{
+                    let (target_position,target_collider,_) = query.get(target).unwrap();
+                     
+                    if target == entity{continue;}
+                    if target > entity{continue;}
+                    if let Some(collision_check_result) = check_collision_for_circle(&position, &radius, &target_position.translation.truncate(), target_collider){
+                        let collision = Collision{
+                            penetration:collision_check_result.0,
+                            normal:collision_check_result.1,
+                            with:target
+                        };
+                         let reciproc_collision = Collision{
+                            penetration:collision_check_result.0,
+                            normal:-collision_check_result.1,
+                            with:entity
+                        };
+                        //gizmos.circle_2d(Isometry2d::from_translation(radius*collision_check_result.1+transform.translation.truncate()), 1.0, RED);
+                        
+                        result.push((collision,entity));
+                        result.push((reciproc_collision,target));
+                    }
+                    
+                }
+                    //mut_query.get_mut(entity).unwrap().collision_list=result;
+              }
+
+              ColliderShape::Rect { size }=>{}
+
+            }
+
+        }
+        //écriture des résultats dans les composants
+        for collision_list in result{
+            collision_list_query.get_mut(collision_list.1).unwrap().collisions.push(collision_list.0);
+           
+        }
+        
+    }
+
+    fn potential_collision(grid : &CollisionGrid, position : &Vec2,collider_shape: &ColliderShape)-> Vec<Entity>{
+        let mut result :Vec<Entity> = Vec::default();
+        let grid_index_list = check_in_cell_or_overlap(position, &collider_shape);
+
+        for index in grid_index_list{
+            if let Some(entity_list) = get_entity_in_cell(index, grid){
+
+                for entity in entity_list{
+                result.push(*entity);
+                }
+            
+            }
+        }
+        result
+    }
+
+    fn check_collision_for_circle(position : &Vec2,collider_radius: &f32,target_position : &Vec2,target_collider: &Collider)->Option<(f32,Vec2)>{
+
+        match target_collider.shape {
+
+              ColliderShape::Circle { radius }=>{
+                let source_to_target_vector = target_position-position;
+               
+                let is_touching = source_to_target_vector.length() <= (radius+collider_radius);
+                if !is_touching {return None;}
+                let collision_normal = source_to_target_vector.normalize();
+                let touching_point = ((position + collision_normal*collider_radius) + (position+ collision_normal*(source_to_target_vector.length()-radius)))*0.5;
+                let penetration = (touching_point - (position + collision_normal*collider_radius)).length();
+
+                return Some((penetration,collision_normal));
+              }
+
+              ColliderShape::Rect { size }=>{return None;}
+
+        }
+
+
+    }
+
+    pub fn correct_collider_overlap(mut query: Query<(&mut Transform,&Collider,&CollisionList,Entity)>,rigidbody_query:Query<&RigidBody>){
+
+         query.par_iter_mut().for_each(|(mut transform,collider,collision_list,entity)|{
+
+            match collider.shape{
+
+                ColliderShape::Circle { radius }=>{
+                    for collision in &collision_list.collisions{
+                        let target_inverse_mass = 1.0/rigidbody_query.get(collision.with).unwrap().mass;
+                        let this_inverse_mass = 1.0/rigidbody_query.get(entity).unwrap().mass;
+                        let correction_factor = this_inverse_mass/(this_inverse_mass+target_inverse_mass);
+                        let delta = -collision.penetration*collision.normal*correction_factor;
+                        transform.translation +=delta.extend(0.0);
+                    }
+
+                }
+
+
+                ColliderShape::Rect { size }=>{}
+
+            }
+
+        });
+
+
+    }
+
+impl RayCastResult{
+
+    pub fn closest(&self)->Option<RayCastIntersection>{
+        let mut distance_buffer = f32::MAX;
+        let mut index = 0;
+        let mut i =0;
+        for intercection in &self.intersection_list{
+            
+            if intercection.distance> distance_buffer{i+=1; continue;}
+
+            distance_buffer=intercection.distance;
+            index=i;
+            i +=1;
+        }
+       
+       if self.intersection_list.len()==0 {return None;}
+       Some(self.intersection_list[index].clone())
+    }
+}
+
+    
